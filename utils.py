@@ -205,7 +205,7 @@ class EarthquakeCatalog(Catalog):
             dep = loc.depth
             time = loc.time.matplotlib_date
             mag = event.preferred_magnitude().mag
-            f.write("{}, {}, {}, {}, {}, {}\n".format(ID, time, lat, lon, dep, mag))
+            f.write("{},{},{},{},{},{}\n".format(ID, time, lat, lon, dep, mag))
         f.close()
         df = pd.read_csv(filename)
 
