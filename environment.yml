@@ -1,0 +1,18 @@
+name: grGIS_seismicity
+
+channels:
+  - anaconda
+  - conda-forge
+
+dependencies:
+  - python=3.10
+  - jupyter
+  - obspy
+  - numpy 
+  - pandas 
+  - scikit-learn
+  - seaborn
+  - scipy
+  - cartopy
+  - shapely
+  - geopandas
