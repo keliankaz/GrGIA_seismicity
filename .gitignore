@@ -6,4 +6,4 @@ lightning_logs/*
 *.ipynb_checkpoints/*
 *.egg-info/*
 .DS_Store
-
+declustering/*
