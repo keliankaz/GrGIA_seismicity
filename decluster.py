@@ -42,6 +42,8 @@ def time_torchETAS_decluster(
         getattr(model, param).item() for param in ["mu", "k", "c", "p", "alpha"]
     ]
 
+    print(f"mu: {mu}, k: {k}, c: {c}, p: {p}, alpha: {alpha}")
+
     etas_rate = lambda t, ti, mi: mu + np.sum(
         k * 10 ** (alpha * (mi - event_catalog.mag_completeness)) / (t - ti + c) ** p
     )
