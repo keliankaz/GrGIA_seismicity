@@ -1,6 +1,4 @@
 import numpy as np
-from typing import Optional
-
 
 def jitter(x, sigma):
     return x + np.random.normal(0, sigma, x.shape)
@@ -18,17 +16,6 @@ def get_bvalue(M, Mc, inc=0.0, apply_jitter=False):
         utsu_correction = inc * 0.5
 
     return np.log10(np.exp(1)) / (np.mean(M) - Mc + utsu_correction)
-
-
-def get_bpositive(M, del_Mc, inc=0.0, apply_jitter=False):
-    """Returns the b-value for a given set of magnitudes M using b positive.
-
-    Note that this assumes that magntidudes are sorted in increasing temporal order."""
-
-    delta_M = np.diff(M)
-    delta_positive = delta_M[delta_M > 0]
-
-    return get_bvalue(delta_positive, del_Mc, inc, apply_jitter)
 
 
 def get_clustered_fraction(t):
@@ -65,65 +52,123 @@ def bootstrap_df(df, f, kwarg=None, boot=1000):
     )
 
 
-def get_apositive(
-    mag: np.ndarray, 
-    t: np.ndarray, 
-    dMc: float = 0.2, 
-    Mref: float = 5, 
-    b_pos: Optional[float] = None,
-):
-    """Returns the a(+) values for a given set of magnitudes M and 
-    times t using b positive.
-    
-    If b_pos is not provided, it is calculated from the data using the dMc
-    value provided.
-    
-    Input:
-        mag: array of magnitudes
-        t: array of times
-        dMc: magnitude of completeness
-        Mref: reference magnitude
-        b_pos: b-value for positive magnitudes
+class PositiveStat:
+    def __init__(
+        self,
+        time: np.ndarray = None,
+        magnitude: np.ndarray = None,
+        minimum_magnitude_delta: float = 0.1,
+        rate_reference_magnitude: float = 5,
+        magnitude_jitter:float = 0.01,
+    ) -> None:
         
-    Output:
-        r_pos: pairwise estimates of the rate of Mref earthquakes (r_pos = 1/dt_pos)
-        dt_pos: pairwise interevent times, corrected for dMc but not scaled 
-            to Mref
-        t_measure: absolute time of the larger earthquake with M > mag + dMc.
-            (Usefule for associating r_pos with the mean time of the pair.)
+        """Set of positive catalog statistics directly following code shared by Nicholas Van Der Elst
+        
+        Usage:
+        
+        N = 100000
+        times = np.random.random(N)
+        times = np.sort(times)
+        magnitudes = np.random.exponential(1,N)
+        stat = PositiveStat(times,magnitudes)
+        
+        b_positive = stat.get_b()
+        a_positive = stat.get_a()
+        
+        
+        """
+        
+        self._raw_magnitude = magnitude
+        self._raw_time = time
+        self.minimum_magnitude_delta = minimum_magnitude_delta
+        self.reference_magnitude = rate_reference_magnitude
+        self.magnitude_jitter = magnitude_jitter
+        
+        self.check()
+        
+        sorted_indices = np.argsort(self._raw_time)
+        self.time = self._raw_time[sorted_indices]
+        self.magnitude = self._raw_magnitude[sorted_indices]
+        
+        self.magnitude += np.random.normal(0,self.magnitude_jitter, self.magnitude.shape)
+        self.event_count = len(self.magnitude)
+        
+    def check(self):
+        assert len(self._raw_magnitude) == len(self._raw_time)
+        assert self.minimum_magnitude_delta >= 0
     
-    """
-    
-    dt_pos = []
-    t_measure = []
-    
-    assert not np.any(np.diff(t) < 0), "t must be sorted in increasing order."
-    
-    for mag_i, t_i in zip(mag,t):
-        next_larger_event_bool= (
-            (mag >= mag_i + dMc) &
-            (t > t_i)
+    def get_b(self) -> float:
+        magnitude_differences = np.diff(self.magnitude)
+        positive_indices = magnitude_differences >= self.minimum_magnitude_delta - 0.001 # Nicholas substracts 0.001 here for some reason?
+        
+        return 1/np.log(10) * 1/(
+            np.mean(magnitude_differences[positive_indices]) - self.minimum_magnitude_delta
         )
         
-        if np.any(next_larger_event_bool):
-            # argmax returns the first True value in the array of next_larger_event_bool
-            next_larger_index = np.argmax(next_larger_event_bool)
-            dt_pos.append(t[next_larger_index] - t_i)
-            t_measure.append(t[next_larger_index])
+    def get_a(self, referenced=True) -> list[np.ndarray, np.ndarray]:
+        
+        positive_time_differences = []
+        measurement_times = []
+        measurement_mags = []
+        
+        for i in range(self.event_count):
+            
+            index_of_next_larger_event = np.argmax(
+                (self.magnitude >= self.magnitude[i]  + self.minimum_magnitude_delta) & 
+                (self.time > self.time[i])
+            )
+            # argmax returns the first max value so if all true or all false 
+            # index_of_next_larger_event = 0
+            
+            if index_of_next_larger_event:
+                positive_time_differences.append(
+                    self.time[index_of_next_larger_event] - self.time[i]
+                )
+                measurement_times.append(
+                    self.time[i]
+                )  
+                measurement_mags.append(self.magnitude[i])
+        
+        positive_time_differences, measurement_times, measurement_mags = [
+            np.array(list) for list in [positive_time_differences, measurement_times, measurement_mags]
+        ]
+        
+        b_positive = self.get_b()    
+        
+        if referenced is True:
+            scaled_intervals = positive_time_differences * 10** -(
+                b_positive * (measurement_mags + self.minimum_magnitude_delta - self.reference_magnitude)
+            )
         else:
-            dt_pos.append(np.nan)
-            t_measure.append(np.nan)
+            scaled_intervals = positive_time_differences * 10**(-b_positive * self.minimum_magnitude_delta) 
+        
+        a_positive = 1/scaled_intervals
+        
+        sorted_indices = np.argsort(measurement_times)
+        measurement_times, a_positive = [v[sorted_indices] for v in [measurement_times, a_positive]]
+        
+        return measurement_times, a_positive
+    
+    @staticmethod
+    def moving_median(a, t=None, n=3):
+        idx = np.arange(n) + np.arange(len(a)-n+1)[:,None]
+        b = [row[row>0] for row in a[idx]]
+        smoothed = np.array([np.median(c) for c in b])
+        if t is None:
+            return smoothed
+        else:
+            return smoothed, t[n-1:] # causal 
+    
+    @staticmethod
+    def moving_average(a, t=None, n=3):
+        ret = np.cumsum(a, dtype=float)
+        ret[n:] = ret[n:] - ret[:-n]
+        smoothed = ret[n - 1:] / n
+        if t is None:
+            return smoothed
+        else:
+            return smoothed, t[n-1:] # causal 
+        
+
             
-    dt_pos = np.array(dt_pos)
-    t_measure = np.array(t_measure)
-            
-    if b_pos is None:
-        b_pos = get_bpositive(mag, dMc)
-    
-    dt_pos_unscaled = dt_pos * 10 ** (-b_pos * dMc)
-    dt_pos = dt_pos_unscaled * 10 ** (-b_pos * (mag + dMc - Mref))
-    
-    r_pos = 1 / dt_pos
-    
-    return r_pos, dt_pos, t_measure
         
