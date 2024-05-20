@@ -4,7 +4,6 @@ import pandas as pd
 from sklearn.neighbors import BallTree
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 import seaborn as sns
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
