@@ -2,9 +2,7 @@ from sklearn.neighbors import BallTree
 import pandas as pd
 import geopandas as gpd
 import numpy as np
-from shapely import MultiLineString
-from shapely.geometry import LineString, Polygon
-from shapely.ops import linemerge
+from shapely.geometry import LineString
 from typing import Callable
 
 EARTH_RADIUS = 6371  # km
@@ -31,11 +29,11 @@ def densify_geometry(line_geometry, step, crs_in=None, crs_out=None):
     )  # Here, we finally create a new line with densified points.
 
     if (
-        crs_in != None
+        crs_in is not None
     ):  #  If you want to georeference your new geometry, uses crs to do the job.
         new_line_geo = gpd.geoseries.GeoSeries(new_line, crs=crs_in)
 
-    if crs_out != None:
+    if crs_out is not None:
         new_line_geo = new_line_geo.to_crs(crs_out)
         return new_line_geo
 
