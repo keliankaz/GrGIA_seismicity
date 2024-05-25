@@ -8,7 +8,10 @@ import seaborn as sns
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from obspy.clients.fdsn import Client
-from typing import Optional, Literal
+from typing import Optional, Literal, Union
+from pathlib import Path
+import warnings
+import os
 
 EARTH_RADIUS_KM = 6371
 
@@ -101,29 +104,56 @@ class Catalog:
     def get_space_slice(self, latitude_range, longitude_range):
         return self.slice_by("lat", *latitude_range).slice_by("lon", *longitude_range)
 
-    def intersection(self, other: Catalog, buffer_radius_km: float = 50.0) -> Catalog:
-        """returns a new catalog with the events within `buffer_radius_km` of the events in `other`"""
+    def intersection(self, other: Union[Catalog, list], buffer_radius_km: float = 50.0) -> Catalog:
+        """returns a new catalog with the events within `buffer_radius_km` of the events in `other`.
+        
+        Other can either be a another Catalog or a list with with lat and lon"""
+
+        indices = np.unique(
+            np.concatenate(self.get_intersecting_indices(other, buffer_radius_km))
+        )
+
+        return Catalog(self.catalog.iloc[indices])
+
+    def get_intersecting_indices(
+        self, other: Union[Catalog, list], buffer_radius_km: float = 50.0
+    ) -> np.ndarray:
+        """gets the indices of events in `self` that are within `buffer_radius_km` from other.
+
+        The ouput therefore has dimensions [len(other),k] where k is the number of neibors for each event.
+
+        For instance:
+
+        ```
+        [self[indices] for indices in self.get_neighboring_indices(other)]
+        ```
+
+        Returns a list of events for each neighborhood of events in other."""
+        
+        if isinstance(other,Catalog):
+            R = [other.catalog.lat.values, other.catalog.lon.values]
+        elif isinstance(other,list):
+            R = other
+        
         tree = BallTree(
             np.deg2rad([self.catalog.lat.values, self.catalog.lon.values]).T,
             metric="haversine",
         )
 
         indices = tree.query_radius(
-            np.deg2rad([other.catalog.lat.values, other.catalog.lon.values]).T,
+            np.deg2rad(R).T,
             r=buffer_radius_km / EARTH_RADIUS_KM,
             return_distance=False,
         )
-
-        indices = np.unique(np.concatenate(indices))
-
-        return Catalog(self.catalog.iloc[indices])
+        
+        return indices
 
     def get_neighboring_indices(
-        self, other: Catalog, buffer_radius_km: float = 50.0
+        self, other: Union[Catalog, list], buffer_radius_km: float = 50.0
     ) -> np.ndarray:
         """gets the indices of events in `other` that are within `buffer_radius_km` from self.
 
-        The ouput therefore has dimensions [len(other),k] where k is the number of neibors for each event.
+        The ouput therefore has dimensions [len(self),k] where k is the number of neibors for each event.
 
         For instance:
 
@@ -131,10 +161,15 @@ class Catalog:
         [other[indices] for indices in self.get_neighboring_indices(other)]
         ```
 
-        Returns a list of catalogs for each neighborhood of events in self."""
+        Returns a list of events for each neighborhood of events in self."""
+        
+        if isinstance(other,Catalog):
+            R = [other.catalog.lat.values, other.catalog.lon.values]
+        elif isinstance(other,list):
+            R = other
 
         tree = BallTree(
-            np.deg2rad(other.catalog[["lat", "lon"]]).values.T,
+            np.deg2rad(R).T,
             metric="haversine",
         )
 
@@ -349,12 +384,15 @@ class EarthquakeCatalog(Catalog):
 
     @staticmethod
     def get_and_save_catalog(
-        filename: str = "_temp_local_catalog.csv",
+        filename: Union[str, Path] = "_temp_local_catalog.csv",
         starttime: str = "2019-01-01",
         endtime: str = "2020-01-01",
-        latitude_range: list[float, float] = [-90, 90],
-        longitude_range: list[float, float] = [-180, 180],
+        latitude_range: list[float] = [-90, 90],
+        longitude_range: list[float] = [-180, 180],
         minimum_magnitude: float = 4.5,
+        use_local_client: bool = False,
+        default_client_name: str = "IRIS",
+        reload: bool = True,
     ) -> pd.DataFrame:
         """
         Gets earthquake catalog for the specified region and minimum event
@@ -366,12 +404,63 @@ class EarthquakeCatalog(Catalog):
         "primary magnitude" for each event.
         """
 
-        # Use obspy api to ge  events from the IRIS earthquake client
-        client = Client("IRIS")
-        cat = client.get_events(
+        if longitude_range[1] > 180:
+            longitude_range[1] = 180
+            warnings.warn("Longitude range exceeds 180 degrees. Setting to 180.")
+
+        if longitude_range[0] < -180:
+            longitude_range[0] = -180
+            warnings.warn("Longitude range exceeds -180 degrees. Setting to -180.")
+
+        if latitude_range[1] > 90:
+            latitude_range[1] = 90
+            warnings.warn("Latitude range exceeds 90 degrees. Setting to 90.")
+
+        if latitude_range[0] < -90:
+            latitude_range[0] = -90
+            warnings.warn("Latitude range exceeds -90 degrees. Setting to -90.")
+
+        def is_within(lat_range_querry, lon_range_querry, lat_range, lon_range):
+            """
+            Checks if a point is within a latitude and longitude range.
+            """
+            return (
+                (lat_range[0] <= lat_range_querry[0] <= lat_range[1])
+                and (lon_range[0] <= lon_range_querry[0] <= lon_range[1])
+                and (lat_range[0] <= lat_range_querry[1] <= lat_range[1])
+                and (lon_range[0] <= lon_range_querry[1] <= lon_range[1])
+            )
+
+        local_client_coverage = {
+            "GEONET": [[-49.18, -32.28], [163.52, 179.99]],
+        }
+
+        # Note that using local client supersedes the any specified default_client_name
+        if use_local_client:
+            ## use local clients if lat and long are withing the coverage of the local catalogs
+            index = []
+            for i, key in enumerate(local_client_coverage.keys()):
+                if is_within(
+                    latitude_range, longitude_range, *local_client_coverage[key]
+                ):
+                    index.append(i)
+                else:
+                    index.append(i)
+
+            if len(index) > 1:
+                raise ValueError("Multiple local clients found")
+            elif len(index) == 1:
+                if default_client_name is not None:
+                    warnings.warn("Using local client instead of default client")
+                client_name = list(local_client_coverage.keys())[index[0]]
+            else:
+                client_name = default_client_name
+        else:
+            client_name = default_client_name
+
+        querry = dict(
             starttime=starttime,
             endtime=endtime,
-            magnitudetype="MW",
             minmagnitude=minimum_magnitude,
             minlatitude=latitude_range[0],
             maxlatitude=latitude_range[1],
@@ -379,20 +468,48 @@ class EarthquakeCatalog(Catalog):
             maxlongitude=longitude_range[1],
         )
 
-        # Write the earthquakes to a file
-        f = open(filename, "w")
-        f.write("EVENT_ID,time,lat,lon,dep,mag\n")
-        for event in cat:
-            longID = event.resource_id.id
-            ID = longID.split("eventid=", 1)[1]
-            loc = event.preferred_origin()
-            lat = loc.latitude
-            lon = loc.longitude
-            dep = loc.depth
-            time = loc.time.matplotlib_date
-            mag = event.preferred_magnitude().mag
-            f.write("{}, {}, {}, {}, {}, {}\n".format(ID, time, lat, lon, dep, mag))
-        f.close()
-        df = pd.read_csv(filename)
+        if not (
+            reload is False
+            and os.path.exists(filename)
+            and np.load(
+                os.path.splitext(filename)[0] + "_metadata.npy", allow_pickle=True
+            ).item()
+            == querry
+        ):
+            warnings.warn(f"Reloading {filename}")
+
+            # Use obspy api to ge  events from the IRIS earthquake client
+            client = Client(client_name)
+            cat = client.get_events(**querry)
+
+            # Write the earthquakes to a file
+            f = open(filename, "w")
+            f.write("time,lat,lon,depth,mag\n")
+            for event in cat:
+                loc = event.preferred_origin()
+                lat = loc.latitude
+                lon = loc.longitude
+                dep = loc.depth
+                time = loc.time.matplotlib_date
+                mag = event.preferred_magnitude().mag
+                f.write("{},{},{},{},{}\n".format(time, lat, lon, dep, mag))
+            f.close()
+
+            # Save querry to metadatafile
+            np.save(os.path.splitext(filename)[0] + "_metadata.npy", querry)
+        else:
+            warnings.warn(f"Using existing {filename}")
+
+        df = pd.read_csv(filename, na_values="None")
+
+        # remove rows with NaN values, reset index and provide a warning is any rows were removed
+        if df.isna().values.any():
+            warnings.warn(
+                f"{sum(sum(df.isna().values))} NaN values found in catalog. Removing rows with NaN values."
+            )
+            df = df.dropna()
+            df = df.reset_index(drop=True)
+
+        df.depth = df.depth / 1000  # convert depth from m to km
 
         return df
