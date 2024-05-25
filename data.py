@@ -1,11 +1,12 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import copy
-import pandas as pd
+import scipy.io
 import geopandas as gpd
 import cartopy
 import shapely
 import shapely.geometry
+from sklearn.neighbors import BallTree
 from utils import EarthquakeCatalog, Catalog
 from geo_utils import densify_geometry
 
@@ -233,3 +234,103 @@ class MidAtlanticRidge(PlateBoundary):
         
         return interp_merged_boundary
         
+class GIA:
+    def __init__(
+        self,
+        filename,
+        data_key,
+        longterm_filename,
+        data_config,
+        strain_positive_convention,
+        strain_units,
+    ):  
+        
+        self.filename = filename
+        self.longterm_filename = longterm_filename
+        [setattr(self,k,v) for k,v in data_config.items()]
+        self.strain_positive_convention = strain_positive_convention
+        self.strain_units = strain_units
+        
+        # negative sign because the sign convention in the modelling 
+        # specified expansion as positive, but we want **contraction as positive**
+        strain = (-1 if strain_positive_convention == 'compression' else 1) * scipy.io.loadmat(filename)[data_key] 
+
+        # idk man, life is hard (latitudes were specified in decreasing order)
+        strain = np.flip(strain, 1)  
+        
+        if longterm_filename:
+            # negative sign because the sign convention in the modelling 
+            # specified expansion as compression, but we want **contraction as positive**
+            lt =  (-1 if strain_positive_convention == 'compression' else 1) * scipy.io.loadmat(longterm_filename)[data_key]
+         
+            # idk man, life is hard (latitudes were specified in decreasing order)
+            lt = np.flip(lt, 1)  
+
+            strain += lt
+
+
+        assert [
+            data_config[k]
+            for k in ["number_of_times", "number_of_latitudes", "number_of_longitudes"]
+        ] + [3, 3] == list(
+            strain.shape
+        ), "strain data dimensions do not match metadata specification"
+
+        strain_years = np.linspace(
+            *[data_config[k] for k in ["starttime", "endtime", "number_of_times"]],
+        )
+
+        # Careful about tthe edges of the grid. I am following what seems to be done in the lat.mat and lon.mat files.
+        strain_latitudes = np.linspace(
+            *data_config["latitude_range"],
+            data_config["number_of_latitudes"] + 1,
+        )[1:]
+
+        strain_longitudes = np.linspace(
+            *data_config["longitude_range"],
+            data_config["number_of_longitudes"] + 1,
+        )[:-1]
+        
+        self.strain = strain
+        self.time = strain_years
+        self.lat = strain_latitudes
+        self.lon = strain_longitudes
+    
+    def query(
+        self,
+        times: np.ndarray,
+        latitudes: np.ndarray,
+        longitudes: np.ndarray,
+    ) -> np.ndarray:
+        
+        """Query strain data using nearest neighbor search"""
+        
+        time_grid, lat_grid, lon_grid = np.meshgrid(
+            self.time, self.lat, self.lon, indexing="ij"
+        )
+
+        tree = BallTree(
+            np.column_stack([time_grid.flatten(), lat_grid.flatten(), lon_grid.flatten()])
+        )
+
+        querried_indices = tree.query(
+            np.column_stack(
+                [times, latitudes, longitudes],
+            ),
+            k=1,
+        )[1]
+
+        return self.strain.reshape(-1, *self.strain.shape[-2:])[querried_indices, :, :].squeeze()
+    
+    @staticmethod
+    def get_normal_strain(epsilon, p1, p2):
+        horizontal_strain = epsilon[:-1, :-1]
+        rotation90 = np.array(
+            [
+                [0, -1],
+                [1, 0],
+            ]
+        )
+        delta_r = p2 - p1
+        unit_normal = rotation90 @ delta_r / np.sqrt(np.sum(delta_r * delta_r))
+        return (horizontal_strain @ unit_normal).T @ (unit_normal)
