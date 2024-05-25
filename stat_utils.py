@@ -80,19 +80,33 @@ class PositiveStat:
         
         self._raw_magnitude = magnitude
         self._raw_time = time
+        self._flag_datetime = type(self._raw_time[0]) == np.datetime64
+    
+        if self._flag_datetime:
+            self.start_time, self._raw_time_days = self._convert_to_days(self._raw_time)
+        else:
+            self._raw_time_days = self._raw_time
+        
         self.minimum_magnitude_delta = minimum_magnitude_delta
         self.reference_magnitude = rate_reference_magnitude
         self.magnitude_jitter = magnitude_jitter
         
         self.check()
         
-        sorted_indices = np.argsort(self._raw_time)
-        self.time = self._raw_time[sorted_indices]
+        sorted_indices = np.argsort(self._raw_time_days)
+        self.time = self._raw_time_days[sorted_indices]
         self.magnitude = self._raw_magnitude[sorted_indices]
         
         self.magnitude += np.random.normal(0,self.magnitude_jitter, self.magnitude.shape)
         self.event_count = len(self.magnitude)
+    
+    def _convert_to_days(self, t):
+        t0 = np.min(t)
+        return t0,(t-t[0])/np.timedelta64(1,'D')
         
+    def _convert_to_datetime(self,t0,t):
+        return t0 + t*np.timedelta64(1,'D')
+    
     def check(self):
         assert len(self._raw_magnitude) == len(self._raw_time)
         assert self.minimum_magnitude_delta >= 0
@@ -104,8 +118,22 @@ class PositiveStat:
         return 1/np.log(10) * 1/(
             np.mean(magnitude_differences[positive_indices]) - self.minimum_magnitude_delta
         )
+
+    def get_a(self,referenced=True,N=1,filter='median'):
+        t,a = self._get_a(referenced=referenced)
         
-    def get_a(self, referenced=True) -> list[np.ndarray, np.ndarray]:
+        if N>1:
+            if filter=='median':
+                a, t = self.moving_median(a,t,N)
+            if filter=='mean':
+                a, t = self.moving_average(a,t,N)
+                
+        if self._flag_datetime:
+            t = self._convert_to_datetime(self.start_time, t)
+        
+        return t, a
+    
+    def _get_a(self, referenced=True) -> list[np.ndarray, np.ndarray]:
         
         positive_time_differences = []
         measurement_times = []
@@ -168,7 +196,7 @@ class PositiveStat:
             return smoothed
         else:
             return smoothed, t[n-1:] # causal 
-        
+    
 
             
         
