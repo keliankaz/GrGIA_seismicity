@@ -1,11 +1,12 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import copy
+import pandas as pd
 import geopandas as gpd
 import cartopy
 import shapely
 import shapely.geometry
-from utils import EarthquakeCatalog
+from utils import EarthquakeCatalog, Catalog
 from geo_utils import densify_geometry
 
 
@@ -77,14 +78,26 @@ class SpaceTimeGrid:
             
         return ax
     
-class PlateBoundarySPGrid(SpaceTimeGrid):
+class PlateBoundaryRateGrid(SpaceTimeGrid):
     def __init__(
         self,
-        fields:dict,
-        coordinates:dict,
-        times:np.ndarray
+        earthquakes: Catalog,
+        NUMBER_OF_PERIODS = 28,  # number of periods to split the catalog into
+        WINDOW_SIZE = 100,  # km
+        NUMBER_OF_EVENTS = 200,
+        starttime = None,
+        endtime = None,
     ):
-        super().__init__(fields,coordinates,times)
+        
+        # date_range = pd.date_range(
+        #     start=datetime.datetime(GrGIA_strain_metadata["starttime"], 1, 1),
+        #     end=datetime.datetime(GrGIA_strain_metadata["endtime"], 1, 1),
+        #     periods=NUMBER_OF_PERIODS,
+        # )
+        
+        return NotImplementedError
+        
+        
         
 class PlateBoundary:
     
