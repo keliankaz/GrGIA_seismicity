@@ -6,6 +6,23 @@ import matplotlib.pyplot as plt
 # following: http://www.tectonics.caltech.edu/resources/schuster_spectrum/
 
 class Schuster:
+    
+    tides = tides = dict(
+        K2=0.4986,
+        S2=0.5,
+        M2=0.5175,
+        N2=0.5274,
+        K1=0.9973,
+        P1=1.0028,
+        O1=1.0758,
+        T=13.661,
+        S=14.765,
+        A=27.555,
+        E=31.812,
+        SY=182.621,
+        Y=365.260,
+    )
+    
     def __init__(
         self,
         times,
@@ -76,7 +93,7 @@ class Schuster:
         
         return ax
         
-    def spectrum(self, periods=None, minimum_fraction=1/1000, number_of_periods=100, log=True, ax=None,):
+    def spectrum(self, periods=None, minimum_fraction=1/1000, number_of_periods=100, log=True, ax=None,include_tides=False):
         
         if periods is None:
             periods = np.logspace(
@@ -88,7 +105,12 @@ class Schuster:
         if ax is None: 
             _,ax =plt.subplots()
         
-        ax.scatter(periods, self.test(periods),s=1,alpha=0.2)
+        ax.scatter(periods, self.test(periods),s=1,alpha=1)
+        
+        if include_tides is True:
+            for k,v in self.tides.items():
+                ax.axvline(v, lw=0.5,ls=':', label=f'{k}: {v}')
+            ax.legend(bbox_to_anchor=(1,1))
     
         ax.set(
             xlabel='Period tested',
@@ -103,6 +125,10 @@ class Schuster:
             ax.set_xscale('log')
         
         return ax 
+    
+
+    
+   
         
         
         
