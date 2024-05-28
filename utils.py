@@ -9,6 +9,7 @@ import shapely
 import cartopy
 import cartopy.crs as ccrs
 from sklearn.cluster import KMeans
+from obspy.imaging.beachball import beach
 from obspy.clients.fdsn import Client
 from typing import Optional, Literal, Union, Tuple
 from pathlib import Path
@@ -194,6 +195,26 @@ class Catalog:
 
         return new
 
+    def slice_by_categorical(
+        self,
+        col_name: str,
+        val,
+    ) -> Catalog:
+        
+        new = copy.deepcopy(self)
+        if isinstance(val, (int, float, str)):
+            new.catalog =  self.catalog[self.catalog[col_name] == val]
+        elif isinstance(val, (np.ndarray, list)):
+            bool_list = [self.catalog[col_name] == v for v in val]
+            bool_combined = np.logical_or.reduce(bool_list)
+            new.catalog =  self.catalog[bool_combined]
+        else:
+            raise ValueError("Unsupported type for filtering")
+            
+        new.__update__()
+
+        return new
+
     def get_time_slice(self, start_time, end_time):
         return self.slice_by("time", start_time, end_time)
 
@@ -282,7 +303,10 @@ class Catalog:
             np.concatenate(self.get_intersecting_indices(other, buffer_radius_km))
         )
 
-        return Catalog(self.catalog.iloc[indices])
+        new = copy.deepcopy(self)
+        new.catalog = self.catalog.iloc[indices]
+
+        return new
 
     def get_intersecting_indices(
         self, other: Union[Catalog, list], buffer_radius_km: float = 50.0
@@ -739,8 +763,6 @@ class Catalog:
         """
         self.catalog.to_csv(filename, columns=columns, index=False)
 
-
-
 class EarthquakeCatalog(Catalog):
     def __init__(
         self,
@@ -909,3 +931,61 @@ class EarthquakeCatalog(Catalog):
         df.depth = df.depth / 1000  # convert depth from m to km
 
         return df
+
+
+class GCMTcatalog(EarthquakeCatalog):
+    def __init__(
+        self,
+        filename,
+    ):
+        super().__init__(filename)
+        self.catalog["mechanism"] = [
+            self.classify_rake(rake) for rake in self.catalog.n1_rake.values
+        ]
+        
+    def plot_beachballs(self, projection=ccrs.PlateCarree(), ax=None):
+        
+        if ax is None:
+            ax = self.plot_base_map()
+            
+        for strike, dip, rake, x, y in zip(
+            self.catalog.n1_strike.values,
+            self.catalog.n1_dip.values,
+            self.catalog.n1_rake.values,
+            self.catalog.lon.values,
+            self.catalog.lat.values
+        ):
+            beachball = beach(
+                [strike, dip, rake],
+                xy= (x,y),
+                axes=ax,
+                width=100,
+            )
+            ax.add_collection(beachball)
+
+        return NotImplementedError
+    
+    @staticmethod 
+    def classify_rake(rake, tolerance=30):
+        if abs(rake + 90) <= tolerance:
+            return "Normal"
+        elif abs(rake - 90) <= tolerance:
+            return "Reverse"
+        elif abs(rake - 0) <= tolerance or abs(rake - 180) <= tolerance:
+            return "Strike_Slip"
+        return "Oblique"
+        
+    @staticmethod   
+    def _add_time_column(df,col):
+        df["time"] = np.datetime64('1970') + df[col] * np.timedelta64(1,'D') # This could be shifted for exact calcualations.
+        return df
+    
+    @staticmethod
+    def get_and_save_catalog(
+        filename
+    ):
+        df = pd.read_csv(filename)
+        df["mag"] = df.M
+        
+        return df
+    

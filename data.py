@@ -154,6 +154,7 @@ class PlateBoundary:
         
     def get_earthquake_catalog(
         self,
+        earthquakes = None,
         filename = "global_M4.csv",
         query = {
             "minimum_magnitude":4,
@@ -163,15 +164,18 @@ class PlateBoundary:
         buffer_km = 100,  
     ):
         """Gets the plate boundary catalog within a distance buffer_km form the surface trace of the plate boundary."""
-        earthquakes = EarthquakeCatalog(
-            filename=filename,
-            kwargs=query,
-        )
+        if earthquakes is None:
+            earthquakes = EarthquakeCatalog(
+                filename=filename,
+                kwargs=query,
+            )
         
         lonlat =  self.geometries.get_coordinates().values
         
         return earthquakes.intersection([lonlat[:,1],lonlat[:,0]], buffer_radius_km=buffer_km) 
-                      
+    
+    
+               
 class MidAtlanticRidge(PlateBoundary):
     
     def __init__(
