@@ -1,4 +1,4 @@
-name: grGIS_seismicity
+name: grGIA_seismicity_test
 
 channels:
   - anaconda
