@@ -1,4 +1,6 @@
+# %%
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import copy
 import scipy.io
@@ -12,100 +14,97 @@ from geo_utils import densify_geometry
 
 
 class SpaceTimeGrid:
-    def __init__(
-        self,
-        fields:dict,
-        coordinates:dict,
-        times:np.ndarray
-    ):
+    def __init__(self, fields: dict, coordinates: dict, times: np.ndarray):
         self.fields = fields
-        self.coordinates = coordinates 
+        self.coordinates = coordinates
         self._base_coordinate = next(iter(coordinates.values()))
         self._base_coordinate_name = next(iter(coordinates.keys()))
         self.times = times
-        
+
         self.validate_args()
-        
+
     def validate_args(self):
         return NotImplementedError
-    
-    def __add__(self,other):
+
+    def __add__(self, other):
         assert self.coordinates == other.coordinates
         assert np.all(self.times == other.times)
-        
+
         new = copy.deepcopy(self)
-        
+
         for k1 in new.fields.keys():
             new.fields[k1] += other.fields[k1]
-        
+
         return new
-    
+
     def time_stack(self, field):
         return self.fields[field].mean(axis=0)
-    
+
     def space_stack(self, field):
         return self.fields[field].mean(axis=0)
-        
-    def plot_grid(
-        self,
-        field,
-        coordinate=None,
-        ax=None,
-        imshowkwargs=None
-    ):
-        
+
+    def plot_grid(self, field, coordinate=None, ax=None, imshowkwargs=None):
+
         if ax is None:
             fig, ax = plt.subplots()
-        
+
         kwargs = dict(
-            origin='lower',
+            origin="lower",
             extent=[
                 min(self.times),
-                max(self.times), 
-                min(self._base_coordinate if not coordinate else self.coordinates[coordinate]), 
-                max(self._base_coordinate if not coordinate else self.coordinates[coordinate]), 
-            ]
+                max(self.times),
+                min(
+                    self._base_coordinate
+                    if not coordinate
+                    else self.coordinates[coordinate]
+                ),
+                max(
+                    self._base_coordinate
+                    if not coordinate
+                    else self.coordinates[coordinate]
+                ),
+            ],
         )
-        
+
         if imshowkwargs is not None:
             kwargs.update(imshowkwargs)
-        
+
         ax.imshow(self.fields[field], **kwargs)
-        
+
         ax.set(
-            xlabel='Time',
-            ylabel= self._base_coordinate_name if not coordinate else coordinate,
+            xlabel="Time",
+            ylabel=self._base_coordinate_name if not coordinate else coordinate,
         )
-            
+
         return ax
-    
+
+
 class PlateBoundaryRateGrid(SpaceTimeGrid):
     def __init__(
         self,
         earthquakes: Catalog,
-        NUMBER_OF_PERIODS = 28,  # number of periods to split the catalog into
-        WINDOW_SIZE = 100,  # km
-        NUMBER_OF_EVENTS = 200,
-        starttime = None,
-        endtime = None,
+        NUMBER_OF_PERIODS=28,  # number of periods to split the catalog into
+        WINDOW_SIZE=100,  # km
+        NUMBER_OF_EVENTS=200,
+        starttime=None,
+        endtime=None,
     ):
-        
+
         # date_range = pd.date_range(
         #     start=datetime.datetime(GrGIA_strain_metadata["starttime"], 1, 1),
         #     end=datetime.datetime(GrGIA_strain_metadata["endtime"], 1, 1),
         #     periods=NUMBER_OF_PERIODS,
         # )
-        
+
         return NotImplementedError
-        
-        
-        
+
+
 class PlateBoundary:
-    
+
     def __init__(
         self,
         filename=None,
-        bounding_box=[-180,-90,180,90],
+        bounding_box=[-180, -90, 180, 90],
         boundary_names=None,
         mapping_crs=cartopy.crs.PlateCarree(),
     ):
@@ -118,26 +117,17 @@ class PlateBoundary:
         if boundary_names:
             plate_boundaries = plate_boundaries.iloc[
                 np.logical_or.reduce(
-                    [
-                        plate_boundaries.Name == boundary
-                        for boundary in boundary_names
-                    ]
+                    [plate_boundaries.Name == boundary for boundary in boundary_names]
                 )
             ]
-            
-        plate_boundaries = (
-            plate_boundaries
-            .clip(bounding_box)
-            .explode(index_parts=True)
-        )
-        
+
+        plate_boundaries = plate_boundaries.clip(bounding_box).explode(index_parts=True)
+
         self.geometries = plate_boundaries
-        
-        
-    
+
     def plot_basemap(self, ax=None):
         if ax is None:
-            _, ax = plt.subplots(subplot_kw={"projection":  self.mapping_crs})
+            _, ax = plt.subplots(subplot_kw={"projection": self.mapping_crs})
 
         ax.coastlines()
 
@@ -145,23 +135,23 @@ class PlateBoundary:
         ax.set_ylabel("Latitude")
 
         return ax
-    
+
     def plot(self, ax=None):
         ax = self.plot_basemap(ax=ax)
-        self.geometries.geometry.to_crs(self.mapping_crs).plot(ax=ax,color='maroon')    
-        
+        self.geometries.geometry.to_crs(self.mapping_crs).plot(ax=ax, color="maroon")
+
         return ax
-        
+
     def get_earthquake_catalog(
         self,
-        earthquakes = None,
-        filename = "global_M4.csv",
-        query = {
-            "minimum_magnitude":4,
+        earthquakes=None,
+        filename="global_M4.csv",
+        query={
+            "minimum_magnitude": 4,
             "starttime": "1960-01-01",
             "endtime": "2022-01-01",
         },
-        buffer_km = 100,  
+        buffer_km=100,
     ):
         """Gets the plate boundary catalog within a distance buffer_km form the surface trace of the plate boundary."""
         if earthquakes is None:
@@ -169,54 +159,61 @@ class PlateBoundary:
                 filename=filename,
                 kwargs=query,
             )
-        
-        lonlat =  self.geometries.get_coordinates().values
-        
-        return earthquakes.intersection([lonlat[:,1],lonlat[:,0]], buffer_radius_km=buffer_km) 
-    
-    
-               
+
+        lonlat = self.geometries.get_coordinates().values
+
+        return earthquakes.intersection(
+            [lonlat[:, 1], lonlat[:, 0]], buffer_radius_km=buffer_km
+        )
+
+
 class MidAtlanticRidge(PlateBoundary):
-    
+
     def __init__(
         self,
-        filename, # shapefile
-        stepsize = 50000,
-        bounding_box = [-180, 55, 10, 90],
+        filename,  # shapefile
+        stepsize=50000,
+        bounding_box=[-180, 55, 10, 90],
         boundary_names=["NA-EU", "EU-NA"],
-        geographic_crs = cartopy.crs.NorthPolarStereo(),
-        mapping_crs = cartopy.crs.NorthPolarStereo(),
-        exclude_iceland = True,
-        iceland_bounds = [(-25, 52), (-25, 68), (-13, 68), (-13, 52), (-25, 52)],
+        geographic_crs=cartopy.crs.NorthPolarStereo(),
+        mapping_crs=cartopy.crs.NorthPolarStereo(),
+        exclude_iceland=True,
+        iceland_bounds=[(-25, 52), (-25, 68), (-13, 68), (-13, 52), (-25, 52)],
     ):
         super().__init__(
             filename,
             bounding_box=bounding_box,
             boundary_names=boundary_names,
-            mapping_crs = cartopy.crs.NorthPolarStereo(),
+            mapping_crs=cartopy.crs.NorthPolarStereo(),
         )
-        
+
         if exclude_iceland:
             # remove iceland from the plate boundary
-            iceland_bounds =gpd.GeoSeries([shapely.geometry.Polygon(iceland_bounds)])
-            iceland_bounds_df = gpd.GeoDataFrame({'geometry': iceland_bounds}, crs="EPSG:4326")
-            self.geometries = gpd.overlay(self.geometries, iceland_bounds_df, how='difference').explode(index_parts=True)
+            iceland_bounds = gpd.GeoSeries([shapely.geometry.Polygon(iceland_bounds)])
+            iceland_bounds_df = gpd.GeoDataFrame(
+                {"geometry": iceland_bounds}, crs="EPSG:4326"
+            )
+            self.geometries = gpd.overlay(
+                self.geometries, iceland_bounds_df, how="difference"
+            ).explode(index_parts=True)
 
         self.mapping_crs = mapping_crs
-        self.geographic_crs = geographic_crs # this is used for converting to meters
+        self.geographic_crs = geographic_crs  # this is used for converting to meters
         self.merged_geometry_meters = self.densify(step_size=stepsize)
         self.boundary_names = boundary_names
 
     def densify(self, step_size):
-        
+
         # Entering Coordinate reference system hell: proceed with caution
-        crs_proj4 = self.geographic_crs.proj4_init # turns projection into string with projection description 
-        
+        crs_proj4 = (
+            self.geographic_crs.proj4_init
+        )  # turns projection into string with projection description
+
         crs_in = crs_proj4
         crs_out = "EPSG:4326"
 
         # currently in "EPSG:4326"
-        
+
         # convert to new crs that is in meters, this will enable the densifying step.
         boundary_in_meters = self.geometries.to_crs(crs_in)
 
@@ -224,7 +221,8 @@ class MidAtlanticRidge(PlateBoundary):
 
         # merge the boundary into a single line
         merged_boundary_in_meters = shapely.ops.linemerge(
-            shapely.geometry.MultiLineString(boundary_in_meters.geometry.values))
+            shapely.geometry.MultiLineString(boundary_in_meters.geometry.values)
+        )
 
         # densify the boundary
         interp_merged_boundary = densify_geometry(
@@ -233,11 +231,12 @@ class MidAtlanticRidge(PlateBoundary):
             crs_in=crs_in,
             crs_out=crs_out,
         ).geometry.values[0]
-        
+
         # back into "EPSG:4326"
-        
+
         return interp_merged_boundary
-        
+
+
 class GIA:
     def __init__(
         self,
@@ -247,31 +246,34 @@ class GIA:
         data_config,
         strain_positive_convention,
         strain_units,
-    ):  
-        
+    ):
+
         self.filename = filename
         self.longterm_filename = longterm_filename
-        [setattr(self,k,v) for k,v in data_config.items()]
+        [setattr(self, k, v) for k, v in data_config.items()]
         self.strain_positive_convention = strain_positive_convention
         self.strain_units = strain_units
-        
-        # negative sign because the sign convention in the modelling 
+
+        # negative sign because the sign convention in the modelling
         # specified expansion as positive, but we want **contraction as positive**
-        strain = (-1 if strain_positive_convention == 'compression' else 1) * scipy.io.loadmat(filename)[data_key] 
+        strain = (
+            -1 if strain_positive_convention == "compression" else 1
+        ) * scipy.io.loadmat(filename)[data_key]
 
         # idk man, life is hard (latitudes were specified in decreasing order)
-        strain = np.flip(strain, 1)  
-        
+        strain = np.flip(strain, 1)
+
         if longterm_filename:
-            # negative sign because the sign convention in the modelling 
+            # negative sign because the sign convention in the modelling
             # specified expansion as compression, but we want **contraction as positive**
-            lt =  (-1 if strain_positive_convention == 'compression' else 1) * scipy.io.loadmat(longterm_filename)[data_key]
-         
+            lt = (
+                -1 if strain_positive_convention == "compression" else 1
+            ) * scipy.io.loadmat(longterm_filename)[data_key]
+
             # idk man, life is hard (latitudes were specified in decreasing order)
-            lt = np.flip(lt, 1)  
+            lt = np.flip(lt, 1)
 
             strain += lt
-
 
         assert [
             data_config[k]
@@ -294,27 +296,28 @@ class GIA:
             *data_config["longitude_range"],
             data_config["number_of_longitudes"] + 1,
         )[:-1]
-        
+
         self.strain = strain
         self.time = strain_years
         self.lat = strain_latitudes
         self.lon = strain_longitudes
-    
+
     def query(
         self,
         times: np.ndarray,
         latitudes: np.ndarray,
         longitudes: np.ndarray,
     ) -> np.ndarray:
-        
         """Query strain data using nearest neighbor search"""
-        
+
         time_grid, lat_grid, lon_grid = np.meshgrid(
             self.time, self.lat, self.lon, indexing="ij"
         )
 
         tree = BallTree(
-            np.column_stack([time_grid.flatten(), lat_grid.flatten(), lon_grid.flatten()])
+            np.column_stack(
+                [time_grid.flatten(), lat_grid.flatten(), lon_grid.flatten()]
+            )
         )
 
         querried_indices = tree.query(
@@ -324,8 +327,10 @@ class GIA:
             k=1,
         )[1]
 
-        return self.strain.reshape(-1, *self.strain.shape[-2:])[querried_indices, :, :].squeeze()
-    
+        return self.strain.reshape(-1, *self.strain.shape[-2:])[
+            querried_indices, :, :
+        ].squeeze()
+
     @staticmethod
     def get_normal_strain(epsilon, p1, p2):
         horizontal_strain = epsilon[:-1, :-1]
@@ -338,3 +343,89 @@ class GIA:
         delta_r = p2 - p1
         unit_normal = rotation90 @ delta_r / np.sqrt(np.sum(delta_r * delta_r))
         return (horizontal_strain @ unit_normal).T @ (unit_normal)
+
+
+class GIAthumbnail(GIA):
+
+    def __init__(
+        self,
+        strain_filename,
+        coords_filename,
+        data_config=dict(
+            number_of_latitudes=409,
+            number_of_longitudes=149,
+        ),
+        strain_positive_convention="Compression",
+    ):
+
+        self.strain_filename = strain_filename
+        self.coords_filename = coords_filename
+        [setattr(self, k, v) for k, v in data_config.items()]
+        self.strain_positive_convention = strain_positive_convention
+
+        # negative sign because the sign convention in the modelling
+        # specified expansion as positive, but we want **contraction as positive**
+        self.raw_strain = pd.read_csv(self.strain_filename, delim_whitespace=True)
+
+        exx = self.raw_strain["Exx"].values
+        exy = self.raw_strain["Exy"].values
+        exz = self.raw_strain["Exz"].values
+        eyy = self.raw_strain["Eyy"].values
+        eyz = self.raw_strain["Eyz"].values
+        ezz = self.raw_strain["Ezz"].values
+
+        strain_tensor_flat = np.column_stack(
+            [exx, exy, exz, exy, eyy, eyz, exz, eyz, ezz]
+        )
+        
+        flat_strain_depth_slice = strain_tensor_flat[-self.number_of_latitudes * self.number_of_longitudes:,:]
+
+        self.strain = 1e9 * (-1 if strain_positive_convention == "Compression" else 1) * (
+            flat_strain_depth_slice.reshape(  # use only the shallowest layer
+                (self.number_of_latitudes, self.number_of_longitudes, 3, 3)
+            )  # reshape into [space 1, space 2, strain_tensor]
+        )
+
+        self.coordinates = (
+            pd.read_csv(self.coords_filename, delim_whitespace=True)
+            .values[-(self.number_of_latitudes * self.number_of_longitudes):,:]
+            .reshape(
+                (self.number_of_latitudes, self.number_of_longitudes, 3)
+            )  # reshape into [space 1, space 2, [lat, lon, depth_m]]
+        )
+
+    def query(
+        self,
+        times: np.ndarray,
+        latitudes: np.ndarray,
+        longitudes: np.ndarray,
+    ) -> np.ndarray:
+        """Query strain data using nearest neighbor search"""
+
+        tree = BallTree(
+            np.column_stack(
+                [
+                    self.coordinates[:, :, 1].flatten(),
+                    self.coordinates[:, :, 0].flatten(),
+                ]
+            )
+        )
+
+        querried_indices = tree.query(
+            np.column_stack(
+                [latitudes, longitudes],
+            ),
+            k=1,
+        )[1]
+
+        return self.strain.reshape(-1, *self.strain.shape[-2:])[
+            querried_indices, :, :
+        ].squeeze()
+
+
+if __name__ == '__main__':
+    strain_filename = 'data/August24/strain_26'
+    coords_filename = 'data/August24/local_coords.txt'
+    gia = GIAthumbnail(strain_filename,coords_filename)
+# %%
+
