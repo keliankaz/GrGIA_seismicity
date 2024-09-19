@@ -11,6 +11,7 @@ import shapely.geometry
 from sklearn.neighbors import BallTree
 from utils import EarthquakeCatalog, Catalog
 from geo_utils import densify_geometry
+from typing import Literal, Optional
 
 
 class SpaceTimeGrid:
@@ -349,42 +350,36 @@ class GIAthumbnail(GIA):
 
     def __init__(
         self,
-        strain_filename,
-        coords_filename,
-        data_config=dict(
+        strain_base_filename: str,
+        coords_filename: str,
+        long_term_strain_filename: Optional[str] = None, 
+        data_config: dict = dict(
             number_of_latitudes=409,
             number_of_longitudes=149,
+            number_of_years = 27,
+            starttime=1990,
         ),
-        strain_positive_convention="Compression",
+        strain_positive_convention: Literal["Compression", "Extension"] = "Compression",
     ):
 
-        self.strain_filename = strain_filename
+        self.strain_base_filename = strain_base_filename
         self.coords_filename = coords_filename
+        self.long_term_strain_filename = long_term_strain_filename
         [setattr(self, k, v) for k, v in data_config.items()]
         self.strain_positive_convention = strain_positive_convention
 
-        # negative sign because the sign convention in the modelling
-        # specified expansion as positive, but we want **contraction as positive**
-        self.raw_strain = pd.read_csv(self.strain_filename, delim_whitespace=True)
-
-        exx = self.raw_strain["Exx"].values
-        exy = self.raw_strain["Exy"].values
-        exz = self.raw_strain["Exz"].values
-        eyy = self.raw_strain["Eyy"].values
-        eyz = self.raw_strain["Eyz"].values
-        ezz = self.raw_strain["Ezz"].values
-
-        strain_tensor_flat = np.column_stack(
-            [exx, exy, exz, exy, eyy, eyz, exz, eyz, ezz]
-        )
-        
-        flat_strain_depth_slice = strain_tensor_flat[-self.number_of_latitudes * self.number_of_longitudes:,:]
-
-        self.strain = 1e9 * (-1 if strain_positive_convention == "Compression" else 1) * (
-            flat_strain_depth_slice.reshape(  # use only the shallowest layer
-                (self.number_of_latitudes, self.number_of_longitudes, 3, 3)
-            )  # reshape into [space 1, space 2, strain_tensor]
-        )
+        strain = []
+        print("Parsing raw data...")
+        for i_year_count in np.arange(self.number_of_years)+1:
+            print(1990+i_year_count)
+            filename = self.strain_base_filename + (f'__0{i_year_count}' if i_year_count<10 else f'__{i_year_count}')
+            strain.append(self.read_strain_file(filename))
+    
+        self.strain = [si - sip1 for si, sip1 in zip(strain[:-1], strain[1:])] # return to cummulative strain
+            
+        if self.long_term_strain_filename is not None:
+            long_term_strain = self.read_strain_file(filename)
+            self.strain = [s + long_term_strain for s in self.strain]    
 
         self.coordinates = (
             pd.read_csv(self.coords_filename, delim_whitespace=True)
@@ -393,6 +388,37 @@ class GIAthumbnail(GIA):
                 (self.number_of_latitudes, self.number_of_longitudes, 3)
             )  # reshape into [space 1, space 2, [lat, lon, depth_m]]
         )
+        
+        self.time = np.arange(self.number_of_years-1) + self.starttime 
+
+
+    def read_strain_file(self, filename) -> np.ndarray:
+        
+        # negative sign because the sign convention in the modelling
+        # specified expansion as positive, but we want **contraction as positive**
+        raw_strain = pd.read_csv(filename, delim_whitespace=True, names=["Exx","Exy","Exz","Eyy","Eyz","Ezz"])
+
+        exx = raw_strain["Exx"].values
+        exy = raw_strain["Exy"].values
+        exz = raw_strain["Exz"].values
+        eyy = raw_strain["Eyy"].values
+        eyz = raw_strain["Eyz"].values
+        ezz = raw_strain["Ezz"].values
+
+        strain_tensor_flat = np.column_stack(
+            [exx, exy, exz, exy, eyy, eyz, exz, eyz, ezz]
+        )
+        
+        flat_strain_depth_slice = strain_tensor_flat[-self.number_of_latitudes * self.number_of_longitudes:,:]
+
+        strain = 1e9 * (-1 if self.strain_positive_convention == "Compression" else 1) * (
+            flat_strain_depth_slice.reshape(  # use only the shallowest layer
+                (self.number_of_latitudes, self.number_of_longitudes, 3, 3)
+            )  # reshape into [space 1, space 2, strain_tensor]
+        )
+        
+        return strain
+         
 
     def query(
         self,
@@ -417,10 +443,18 @@ class GIAthumbnail(GIA):
             ),
             k=1,
         )[1]
-
-        return self.strain.reshape(-1, *self.strain.shape[-2:])[
-            querried_indices, :, :
-        ].squeeze()
+        
+        times_indices = np.clip(
+            np.int16(np.round(times)-self.starttime),
+            0, self.number_of_years-1-1 # -1 because of zero indexing and -1 for dt
+        )
+        
+        return np.array([
+            self.strain[time_index].reshape(-1, *self.strain[time_index].shape[-2:])[
+                querried_index, :, :
+            ].squeeze() 
+            for time_index, querried_index in zip(times_indices, querried_indices)
+        ])
 
 
 if __name__ == '__main__':
