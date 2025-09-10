@@ -139,7 +139,7 @@ class PlateBoundary:
 
     def plot(self, ax=None):
         ax = self.plot_basemap(ax=ax)
-        self.geometries.geometry.to_crs(self.mapping_crs).plot(ax=ax, color="maroon")
+        self.geometries.geometry.to_crs(self.mapping_crs).plot(ax=ax, color="maroon", linewidth=0.5)
 
         return ax
 
@@ -241,12 +241,12 @@ class MidAtlanticRidge(PlateBoundary):
 class GIA:
     def __init__(
         self,
-        filename,
-        data_key,
-        longterm_filename,
-        data_config,
-        strain_positive_convention,
-        strain_units,
+        filename: str = None,
+        data_key: str = None,
+        longterm_filename: str = None,
+        data_config: dict = None,
+        strain_positive_convention: Literal['compression', 'extension'] = 'compression',
+        strain_units: float = 1,
     ):
 
         self.filename = filename
@@ -260,9 +260,19 @@ class GIA:
         strain = (
             -1 if strain_positive_convention == "compression" else 1
         ) * scipy.io.loadmat(filename)[data_key]
+        
+        # The coordinate system for the strain is:
+        # x: south
+        # y: east
+        # z: up
+        
+        # so epsilon is (as I understand it) -- respects the RHR:
+        # south-south (latidudinal)    south-east                   sou'th-up
+        # south-east                   east-east (longitudinal)     east-up
+        # south-up                     east-up                      up-up (vertical)
 
         # idk man, life is hard (latitudes were specified in decreasing order)
-        strain = np.flip(strain, 1)
+        strain = np.flip(strain, 1) # time is the 0th dimension
 
         if longterm_filename:
             # negative sign because the sign convention in the modelling
@@ -272,9 +282,9 @@ class GIA:
             ) * scipy.io.loadmat(longterm_filename)[data_key]
 
             # idk man, life is hard (latitudes were specified in decreasing order)
-            lt = np.flip(lt, 1)
+            lt = np.flip(lt, 0) # note that there is no time in the 0-th 
 
-            strain += lt
+            strain = strain + lt 
 
         assert [
             data_config[k]
@@ -334,6 +344,7 @@ class GIA:
 
     @staticmethod
     def get_normal_strain(epsilon, p1, p2):
+        """note: assumes that epsilon, p1, and p2 are in the same (cartesian) reference frame"""
         horizontal_strain = epsilon[:-1, :-1]
         rotation90 = np.array(
             [
@@ -344,7 +355,52 @@ class GIA:
         delta_r = p2 - p1
         unit_normal = rotation90 @ delta_r / np.sqrt(np.sum(delta_r * delta_r))
         return (horizontal_strain @ unit_normal).T @ (unit_normal)
+    
+    @staticmethod
+    def get_normal_strain_latlon(epsilon, latitude_1, longitude_1, latitude_2, longitude_2):
+        """note: assumes that the strain reference frame is as follows:
+        
+        The coordinate system for the strain is:
+        x: south
+        y: east
+        z: up
+        
+        so epsilon is (as I understand it) -- respects the RHR:
+        south-south (latidudinal)    south-east                   south-up
+        south-east                   east-east (longitudinal)     east-up
+        south-up                     east-up                      up-up (vertical)
+        
+        """
 
+        # the amplitude of the vector difference between p1 and p2 will be wrong, but the direction will 
+        # be correct. Here we only need the direction of the points.
+        
+        p1 = np.array([
+            90 - latitude_1,
+            longitude_1 * np.cos(latitude_1 * np.pi / 180),
+        ])
+        
+        p2 = np.array([
+            90 - latitude_2,
+            longitude_2 * np.cos(latitude_2 * np.pi / 180),
+        ])
+        
+        # edge cases ... 
+        
+        return GIA.get_normal_strain(epsilon, p1, p2)
+
+
+    @staticmethod
+    def I1(epsilon):
+        return np.trace(epsilon)
+    
+    @staticmethod
+    def I2(epsilon):
+        return 0.5 * (np.trace(epsilon)**2 - np.trace(epsilon**2))
+    
+    @staticmethod
+    def I3(epsilon):
+        return np.linalg.det(epsilon)
 
 class GIAthumbnail(GIA):
 
@@ -357,7 +413,7 @@ class GIAthumbnail(GIA):
             number_of_latitudes=409,
             number_of_longitudes=149,
             number_of_years = 27,
-            starttime=1990,
+            starttime=1993,
         ),
         strain_positive_convention: Literal["Compression", "Extension"] = "Compression",
     ):
@@ -371,14 +427,14 @@ class GIAthumbnail(GIA):
         strain = []
         print("Parsing raw data...")
         for i_year_count in np.arange(self.number_of_years)+1:
-            print(1990+i_year_count)
+            print(data_config["starttime"]+i_year_count)
             filename = self.strain_base_filename + (f'__0{i_year_count}' if i_year_count<10 else f'__{i_year_count}')
             strain.append(self.read_strain_file(filename))
     
-        self.strain = [si - sip1 for si, sip1 in zip(strain[:-1], strain[1:])] # return to cummulative strain
+        self.strain = [sip1 - si for si, sip1 in zip(strain[:-1], strain[1:])] # return to cummulative strain
             
         if self.long_term_strain_filename is not None:
-            long_term_strain = self.read_strain_file(filename)
+            long_term_strain = self.read_strain_file(self.long_term_strain_filename)
             self.strain = [s + long_term_strain for s in self.strain]    
 
         self.coordinates = (
@@ -416,6 +472,30 @@ class GIAthumbnail(GIA):
                 (self.number_of_latitudes, self.number_of_longitudes, 3, 3)
             )  # reshape into [space 1, space 2, strain_tensor]
         )
+        
+        # Rotate the strain tensor to be in the same reference frame as the GIA strain tensor
+        
+        # Original R
+        # x: west
+        # y: south
+        # z: up
+        
+        # GIA strain tensor:
+        # x: south
+        # y: east
+        # z: up
+        
+        # Rotation matrix:
+        R = np.array([
+            [0, 1, 0],
+            [-1, 0, 0],
+            [0, 0, 1],
+        ])
+        
+        # According to numpy: If either argument is N-D, N > 2, it is treated as a stack
+        # of matrices residing in the last two indexes and broadcast accordingly.
+        
+        strain = R @ strain @ R.T
         
         return strain
          
