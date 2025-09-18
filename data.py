@@ -160,6 +160,7 @@ class PlateBoundary:
                 filename=filename,
                 kwargs=query,
             )
+            self._raw_earthquake_catalog = earthquakes
 
         lonlat = self.geometries.get_coordinates().values
 
