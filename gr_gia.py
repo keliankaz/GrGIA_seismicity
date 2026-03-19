@@ -552,7 +552,7 @@ def reproduce_figures(
     axb.set_facecolor('none')
     AX[1].set_facecolor('none')
 
-    axb.set(xlabel="Year", ylabel="Earthquake rate", xlim=[date_range[1:].min(), date_range[1:].max()])
+    axb.set(xlabel="Year", ylabel="Earthquake rate\n[events/yr]", xlim=[date_range[1:].min(), date_range[1:].max()])
     ax.set(ylabel=f"Strain rate change since {date_range[1:].min().year}")
 
     # top left legend

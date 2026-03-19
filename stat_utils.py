@@ -110,14 +110,22 @@ class PositiveStat:
     def check(self):
         assert len(self._raw_magnitude) == len(self._raw_time)
         assert self.minimum_magnitude_delta >= 0
-    
-    def get_b(self) -> float:
-        magnitude_differences = np.diff(self.magnitude)
-        positive_indices = magnitude_differences >= self.minimum_magnitude_delta - 0.001 # Nicholas substracts 0.001 here for some reason?
         
-        return 1/np.log(10) * 1/(
+    @property
+    def b(self) -> float:
+        if hasattr(self, '_b') and self._b_overridden:
+            return self._b
+        magnitude_differences = np.diff(self.magnitude)
+        positive_indices = magnitude_differences >= self.minimum_magnitude_delta - 0.001  # Nicholas subtracts 0.001 here for some reason?
+        return 1 / np.log(10) * 1 / (
             np.mean(magnitude_differences[positive_indices]) - self.minimum_magnitude_delta
         )
+        
+
+    @b.setter
+    def b(self, value: float):
+        self._b = value
+        self._b_overridden = True
 
     def get_a(self,referenced=True,N=1,filter='median'):
         t,a = self._get_a(referenced=referenced)
@@ -161,7 +169,7 @@ class PositiveStat:
             np.array(list) for list in [positive_time_differences, measurement_times, measurement_mags]
         ]
         
-        b_positive = self.get_b()    
+        b_positive = self.b    
         
         if referenced is True:
             scaled_intervals = positive_time_differences * 10** -(
