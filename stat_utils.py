@@ -80,7 +80,7 @@ class PositiveStat:
         
         self._raw_magnitude = magnitude
         self._raw_time = time
-        self._flag_datetime = type(self._raw_time[0]) == np.datetime64
+        self._flag_datetime = isinstance(self._raw_time[0], np.datetime64)
     
         if self._flag_datetime:
             self.start_time, self._raw_time_days = self._convert_to_days(self._raw_time)

@@ -5,7 +5,6 @@ import datetime
 import cartopy.crs as ccrs
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 from geo_utils import (
     radius_search,
     k_nearest_search,
@@ -165,7 +164,6 @@ def reproduce_figures(
     catalog = earthquakes.catalog
 
     rate_grid = []
-    b_time = []
     all_indices = []
 
     delta_t = date_range[1] - date_range[0]
@@ -239,9 +237,6 @@ def reproduce_figures(
         orientation="horizontal",
         label=r"$\log(N_{Eq})$" + f", in {RADIUS} km radius",
     )
-
-    norm = mpl.colors.Normalize(vmin=color_range[0], vmax=color_range[1])
-    cmap = mpl.cm.ScalarMappable(norm=norm, cmap=mpl.cm.get_cmap('RdYlBu_r'))
 
     plt.tight_layout()
     plt.savefig(save_path + "grgia_map" + figure_suffix + ".pdf", dpi=300)
