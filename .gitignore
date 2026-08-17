@@ -1,3 +1,4 @@
+.gitignore
 CLAUDE.md
 __pycache__/*
 deprecated/*
