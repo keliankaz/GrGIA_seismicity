@@ -11,7 +11,6 @@ from geo_utils import (
     get_geometry_neighbors,
 )
 from stat_utils import bootstrap_statistic
-from utils import GCMTcatalog
 from data import MidAtlanticRidge, GIA
 
 #%%
@@ -26,14 +25,16 @@ AVAILABLE_STRAIN_RATE_FILES = {
     "july25_long_term": "Jul25/presentday_strain_rate_tensors_l90ump5lm3_ICE6G_S_fixbeta.mat",
 }
 
+DEFAULT_MAP_CRS = ccrs.NorthPolarStereo()
+
 def reproduce_figures(
+    plate_boundary_metadata: dict,
+    region_metadata: dict,
+    earthquake_catalog_metadata: dict,
+    GrGIA_strain_metadata: dict,
     save_path: str = "figures/",
     figure_suffix: str = "",
-    plate_boundary_metadata: dict = None,
-    earthquake_catalog_metadata: dict = None,
-    GrGIA_strain_metadata: dict = None,
-    region_metadata: dict = None,
-    crs=ccrs.NorthPolarStereo(),
+    crs: ccrs.NorthPolarStereo = DEFAULT_MAP_CRS,
 ):
 
     # plate boundary data:
@@ -44,11 +45,13 @@ def reproduce_figures(
 
     # earthquake data (ISC):
     earthquakes = MAR.get_earthquake_catalog(**earthquake_catalog_metadata["ISC"])
+    
+    earthquakes = earthquakes.get_time_slice(
+        datetime.datetime(GrGIA_strain_metadata['data_config']["starttime"],1,1),
+        datetime.datetime(GrGIA_strain_metadata['data_config']["endtime"]+1,1,1)
+    )
+    
     earthquakes.mag_completeness = earthquake_catalog_metadata["mag_completeness"]
-
-    # earthquake focal mechanism data (gCMT): 
-    gcmt_earthquakes = GCMTcatalog(earthquake_catalog_metadata["gCMT"]["filename"])
-    gcmt_earthquakes =  MAR.get_earthquake_catalog(gcmt_earthquakes)
 
     # GIA model output:
     gia = GIA(**GrGIA_strain_metadata)
@@ -56,7 +59,7 @@ def reproduce_figures(
     date_range = pd.date_range(
         start=datetime.datetime(GrGIA_strain_metadata['data_config']["starttime"], 1, 1),
         end=datetime.datetime(GrGIA_strain_metadata['data_config']["endtime"], 1, 1),
-        periods=GrGIA_strain_metadata['data_config']["number_of_times"]+1, # I honestly don't remember why the +1 is here
+        periods=GrGIA_strain_metadata['data_config']["number_of_times"]+1, # + 1 because we want to include the last year for seismicity analysis
     )
 
     # strain -> earthquake
@@ -89,18 +92,6 @@ def reproduce_figures(
     )
     earthquakes.catalog["plate_boundary_segment"] = [
         segment[i, :] for i in range(segment.shape[0])
-    ]
-
-    # ISC -> gCMT
-    indices = k_nearest_search(
-        gcmt_earthquakes.catalog[["lat", "lon"]].values,
-        earthquakes.catalog[["lat", "lon"]].values,
-        k=1,
-    )
-
-    # gCMT -> ISC
-    earthquakes.catalog["proxy_mechanism"] = [
-        gcmt_earthquakes.catalog["mechanism"].values[i] for i in indices.squeeze()
     ]
 
     def unravelled_grid(t, lat, lon):
@@ -187,7 +178,7 @@ def reproduce_figures(
     # Figure 2: Space-time rate of earthquakes
 
     crs = ccrs.NorthPolarStereo()
-    fig, AX = plt.subplots(1,2,subplot_kw=dict(projection=crs), figsize=(6.5, 4), dpi=300)
+    fig, AX = plt.subplots(1,2,subplot_kw={"projection": crs}, figsize=(6.5, 4), dpi=300)
 
     ax=AX[0]
     color_range = [-2, 2]
@@ -245,7 +236,6 @@ def reproduce_figures(
     # Figure 3: 
 
     #Get plate rates to normalize eq rate by
-
     NA_pole = [48.709, -78.167, 0.7486]  # deg/MA - DeMets et al. [1994]
     EU_pole = [61.066, -85.819, 0.8591]  # deg/MA - DeMets et al. [1994]
 
@@ -292,7 +282,7 @@ def reproduce_figures(
         lat=MAR.merged_geometry_meters.xy[1], lon=MAR.merged_geometry_meters.xy[0]
     )
 
-    def summary_plot(x, y, cut, theshold=0, data_label=None):
+    def summary_plot(x, y, cut, theshold=0, data_label=None, AX=None, annotate=True):
         """
         Summary plot of the data.
 
@@ -304,10 +294,14 @@ def reproduce_figures(
             The data to plot.
         cut : separates the 'high' and 'low' values of x.
         theshold : optional buffer around the cut.
+        AX : optional row of 3 axes to draw into (a new figure is made if None).
+        annotate : draw the legend and the bootstrap title (turn off on
+            repeated rows of a stacked figure).
 
         """
 
-        fig, AX = plt.subplots(1, 3, sharey=True, figsize=(6.5, 3))
+        if AX is None:
+            _, AX = plt.subplots(1, 3, sharey=True, figsize=(6.5, 3))
         ax = AX[0]
 
         # Labels are flipped pos/neg to match convention since strain is *-1
@@ -317,9 +311,10 @@ def reproduce_figures(
         ax.scatter(-x[negative_index], y[negative_index], s=2, alpha=0.5, color="C3")
         ax.scatter(-x[positive_index], y[positive_index], s=2, alpha=0.5)
         ax.set_xlabel(f"{data_label}")
-        ax.set_ylabel("Earthquake Rate / \n Relative Plate Velocity")
+        ax.set_ylabel("Event rate / plate rate \n" + r"[(50 km segment)$^{-1}$ m$^{-1}$]")
         ax.axvline(-cut, c="lightgrey", ls="--", label="mean")
-        ax.legend()
+        if annotate:
+            ax.legend()
 
         ax = AX[1]
         range_95th_percentile = np.percentile(y, [0.5, 99.5])
@@ -329,7 +324,7 @@ def reproduce_figures(
             bins=bins,
             orientation="horizontal",
             alpha=0.7,
-            label="strain<{theshold}".format(theshold=cut - theshold),
+            label=f"strain<{cut - theshold}",
             density=True,
             color="C3",
         )
@@ -338,7 +333,7 @@ def reproduce_figures(
             bins=bins,
             orientation="horizontal",
             alpha=0.7,
-            label="strain>{theshold}".format(theshold=cut + theshold),
+            label=f"strain>{cut + theshold}",
             density=True,
         )
 
@@ -379,13 +374,13 @@ def reproduce_figures(
 
         ax.set(
             xticks=[],
-            title="Bootstrap mean (N={number_of_bootstrap_samples})".format(
-                number_of_bootstrap_samples=number_of_bootstrap_samples,
+            title=(
+                f"Bootstrap mean\n(N={number_of_bootstrap_samples:,})"
+                if annotate
+                else None
             ),
         )
 
-        plt.tight_layout()
-        
         return AX
 
     def arrow_annotation(ax, y_pos=0.05, x_center=0.9, arrow_len=0.1, color="k", direction="outwards", orientation="horizontal"):
@@ -396,28 +391,28 @@ def reproduce_figures(
                 ax.annotate(
                     "", xy=(x_center - arrow_len, y_pos), xycoords="axes fraction",
                     xytext=(x_center, y_pos), textcoords="axes fraction",
-                    arrowprops=dict(arrowstyle="->", lw=1, color=color)
+                    arrowprops={"arrowstyle": "->", "lw": 1, "color": color}
                 )
 
                 # right-pointing arrow
                 ax.annotate(
                     "", xy=(x_center + arrow_len, y_pos), xycoords="axes fraction",
                     xytext=(x_center, y_pos), textcoords="axes fraction",
-                    arrowprops=dict(arrowstyle="->", lw=1, color=color)
+                    arrowprops={"arrowstyle": "->", "lw": 1, "color": color}
                 )
             elif direction == "inwards":
                 # right-pointing arrow
                 ax.annotate(
                     "", xy=(x_center, y_pos), xycoords="axes fraction",
                     xytext=(x_center - arrow_len, y_pos), textcoords="axes fraction",
-                    arrowprops=dict(arrowstyle="->", lw=1, color=color)
+                    arrowprops={"arrowstyle": "->", "lw": 1, "color": color}
                 )
 
                 # left-pointing arrow
                 ax.annotate(
                     "", xy=(x_center, y_pos), xycoords="axes fraction",
                     xytext=(x_center + arrow_len, y_pos), textcoords="axes fraction",
-                    arrowprops=dict(arrowstyle="->", lw=1, color=color)
+                    arrowprops={"arrowstyle": "->", "lw": 1, "color": color}
                 )
         elif orientation == "vertical":
             if direction == "outwards":
@@ -425,57 +420,78 @@ def reproduce_figures(
                 ax.annotate(
                     "", xy=(x_center, y_pos - arrow_len), xycoords="axes fraction",
                     xytext=(x_center, y_pos), textcoords="axes fraction",
-                    arrowprops=dict(arrowstyle="->", lw=1, color=color)
+                    arrowprops={"arrowstyle": "->", "lw": 1, "color": color}
                 )
 
                 # up-pointing arrow
                 ax.annotate(
                     "", xy=(x_center, y_pos + arrow_len), xycoords="axes fraction",
                     xytext=(x_center, y_pos), textcoords="axes fraction",
-                    arrowprops=dict(arrowstyle="->", lw=1, color=color)
+                    arrowprops={"arrowstyle": "->", "lw": 1, "color": color}
                 )
             elif direction == "inwards":
                 # up-pointing arrow
                 ax.annotate(
                     "", xy=(x_center, y_pos), xycoords="axes fraction",
                     xytext=(x_center, y_pos - arrow_len), textcoords="axes fraction",
-                    arrowprops=dict(arrowstyle="->", lw=1, color=color)
+                    arrowprops={"arrowstyle": "->", "lw": 1, "color": color}
                 )
 
                 # down-pointing arrow
                 ax.annotate(
                     "", xy=(x_center, y_pos), xycoords="axes fraction",
                     xytext=(x_center, y_pos + arrow_len), textcoords="axes fraction",
-                    arrowprops=dict(arrowstyle="->", lw=1, color=color)
+                    arrowprops={"arrowstyle": "->", "lw": 1, "color": color}
                 )
 
+    # unit conversion: events / catalog duration / node area / (mm/yr)  -> events / yr / m^2 / (m/yr)
+    normalized_rate =((rate / plate_boundary_velocity)[1:] + (rate/plate_boundary_velocity)[:-1])/2 # strains are measured in between node points
+    
+    converted_rate = (
+        normalized_rate 
+        / ((earthquakes.end_time - earthquakes.start_time)/ np.timedelta64(1, 'Y'))
+        # / (np.pi * (plate_boundary_metadata["stepsize"])**2) # m^2 
+        / (1/1e3) # mm/yr -> m/yr 
+    )
+    
+    # Both strain components share the same y variable (normalized event rate),
+    # so they are stacked as rows of a single figure with a shared y axis.
+    _, AX = plt.subplots(2, 3, sharey=True, figsize=(6.5, 5.5))
 
     cut = np.mean(np.mean(normal_strain_grid, axis=1))
-    AX = summary_plot(
+    summary_plot(
         np.mean(normal_strain_grid, axis=1),
-        (rate / plate_boundary_velocity)[1:],
+        converted_rate,
         cut,
         theshold=0,
-        data_label=r"Time averaged $\dot{\epsilon}_N$",
+        data_label=r"Time averaged $\dot{\epsilon}_N$ [s$^{-1}$]",
+        AX=AX[0],
     )
 
-    arrow_annotation(AX[0], color="C3", direction="outwards", orientation="horizontal")
-    arrow_annotation(AX[0], color="C0", x_center=0.1, direction="inwards", orientation="horizontal")
-
-    plt.savefig(save_path + "grgia_histograms" + figure_suffix + ".pdf", dpi=300)
+    arrow_annotation(AX[0, 0], color="C3", direction="outwards", orientation="horizontal")
+    arrow_annotation(AX[0, 0], color="C0", x_center=0.1, direction="inwards", orientation="horizontal")
 
     cut = np.mean(np.mean(strain_at_plate_boundary_grid[:, :, 2, 2], axis=1))
-    AX = summary_plot(
+
+    summary_plot(
         np.mean(strain_at_plate_boundary_grid[:, :, 2, 2][1:], axis=1),
-        (rate / plate_boundary_velocity)[1:],
+        converted_rate,
         cut,
         theshold=0,
-        data_label="Time averaged vertical strain",
+        data_label=r"Time averaged $\dot{\epsilon}_z$ [s$^{-1}$]",
+        AX=AX[1],
+        annotate=False,
     )
 
-    arrow_annotation(AX[0], color="C3", y_pos=0.15, direction="outwards", orientation="vertical")
-    arrow_annotation(AX[0], color="C0", y_pos=0.15, x_center=0.1, direction="inwards", orientation="vertical")
-    
+    arrow_annotation(AX[1, 0], color="C3", y_pos=0.15, direction="outwards", orientation="vertical")
+    arrow_annotation(AX[1, 0], color="C0", y_pos=0.15, x_center=0.1, direction="inwards", orientation="vertical")
+
+    plt.tight_layout()
+    plt.savefig(save_path + "grgia_histograms" + figure_suffix + ".pdf", dpi=300)
+
+
+    ################################################################################
+    # Figure 4: 
     fig, AX = plt.subplots(2, 1, figsize=(5, 5), dpi=200, gridspec_kw={'hspace': -0.6})
 
     extentional_indices = np.where(
@@ -487,15 +503,11 @@ def reproduce_figures(
 
     # plot the space-averaged strain vs time
     ax = AX[0]
-
-    # for row in normal_strain_grid:
-    #     ax.plot(date_range[1:], row - row[0], color="k", alpha=0.1)
-
     v = np.mean(normal_strain_grid[extentional_indices, :], axis=0)
     ax.plot(
         date_range[1:],
         v - v[0],
-        label="more compressional",
+        label="more contractional",
         color="C0",
     )
 
@@ -527,7 +539,7 @@ def reproduce_figures(
         date_range[1:],
         np.mean(rate_grid[contraction_indices, :], axis=0),
         color="C0",
-        label="more compressional",
+        label="more contractional",
     )
 
     axb.plot(
@@ -547,8 +559,9 @@ def reproduce_figures(
     axb.set_facecolor('none')
     AX[1].set_facecolor('none')
 
-    axb.set(xlabel="Year", ylabel="Earthquake rate\n[events/yr]", xlim=[date_range[1:].min(), date_range[1:].max()])
+    axb.set(xlabel="Year", ylabel="Mean earthquake rate\n[events/yr per segment]", xlim=[date_range[1:].min(), date_range[1:].max()])
     ax.set(ylabel=f"Strain rate change since {date_range[1:].min().year}")
+
 
     # top left legend
     AX[0].legend(
@@ -558,7 +571,149 @@ def reproduce_figures(
 
     plt.tight_layout()
     plt.savefig(save_path + "grgia_strain_vs_time" + figure_suffix + ".pdf", dpi=300)
-# %%
+
+
+
+    ## ##############################################################################
+    # supplemental figure: comparison of apertures and lags: 
+    fig, ax = plt.subplots(figsize=(3,3))
+ 
+    outlier_index = 12
+    
+    cont = np.mean(normal_strain_grid[contraction_indices, :], axis=0)
+    ext = np.mean(normal_strain_grid[extentional_indices, :], axis=0)
+
+    x = (cont - cont[0]) - (ext - ext[0])
+    y = np.mean(rate_grid[extentional_indices, :], axis=0) - np.mean(rate_grid[contraction_indices, :], axis=0)
+
+    # # remove outlinr
+
+    # x = x[np.arange(len(x)) != outlier_index]
+    # y = y[np.arange(len(y)) != outlier_index]
+
+    lag = 3 # years
+
+    ax.scatter(
+        x[:-lag],
+        y[lag:],
+        s=4,
+    )
+
+    # a bootstrapped linear fit
+    def boot_fit(x, y, n_boot=10000, ax=None):   
+        slopes = []
+        intercepts = []
+
+        for i in range(n_boot):
+            idx = np.random.choice(len(x), size=len(x), replace=True)
+            x_sample = x[idx]
+            y_sample = y[idx]
+            coef = np.polyfit(x_sample, y_sample, 1)
+            slopes.append(coef[0])
+            intercepts.append(coef[1])
+
+        # Plot the bootstrap linear fits (optional)
+        if ax is not None:
+            for s, ic in zip(slopes[:1000], intercepts[:1000]):  # Plot only first 100 for visibility
+                ax.plot(x, s * x + ic, color='gray', lw=0.5, alpha=0.01)
+            
+        return slopes, intercepts
+
+    slopes, intercepts = boot_fit(x[:-lag],y[lag:], ax=ax)
+
+
+    # Plot median fit
+    median_slope = np.median(slopes)
+    median_intercept = np.median(intercepts)
+    ax.plot(x, median_slope * x + median_intercept, color="k", lw=1, alpha=0.5, label='Bootstrapped fit')
+    ax.set(
+        xlabel="Strain rate change since {starttime}".format(starttime=GrGIA_strain_metadata['data_config']["starttime"]),
+        ylabel=rf"$\Delta R$ ({lag} year lag)",
+    )
+
+
+    # Create inset in the top left corner
+    # Create inset in the top left corner
+    ax_inset = ax.inset_axes([0.05, 0.7, 0.5, 0.25])  # [left, bottom, width, height] in axes fraction; values position it in top left
+
+    bins = np.linspace(min(slopes), max(slopes), 50)
+    ax_inset.hist(slopes, bins=bins, color='grey', alpha=0.5, edgecolor=None)
+    ax_inset.hist(slopes, bins=bins, color='grey', histtype='step', lw=0.5)
+
+    ax_inset.set(
+        xlabel="Slope",
+        yticks=[],
+    )
+
+    # remove the top and right spines
+    ax_inset.spines['top'].set_visible(False)
+    ax_inset.spines['right'].set_visible(False)
+    ax_inset.spines['left'].set_visible(False)
+    ax_inset.axvline(median_slope, color='k', alpha=0.5, lw=1)
+    ax_inset.text(
+        0.97, 0.97,
+        f"$p: ${np.mean(np.array(slopes)<0):.2f}\n $N$: {len(slopes)}",
+        transform=ax_inset.transAxes,
+        ha='right', va='top'
+    )
+
+    ax.axhline(0, color='k', lw=0.8)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
+    
+    p = []
+    med_slopes = []
+    lags = np.arange(-8, 8)  # lags [years]
+    for lag in lags:
+        if lag > 0:
+            xx, yy = x[:-lag], y[lag:]
+        elif lag < 0:
+            xx, yy = x[-lag:], y[:lag]
+        else:  # lag == 0
+            xx, yy = x, y
+        slopes, intercepts = boot_fit(xx, yy)
+        p_val = np.mean(np.array(slopes) < 0)
+        med_slopes.append(np.mean(slopes))
+        p.append(p_val)
+        
+    plt.savefig(save_path + "lag_correlation" + figure_suffix + ".pdf", dpi=300, bbox_inches="tight")
+        
+    fig, ax = plt.subplots(figsize=(3,1))
+    ax.axvline(0, color='k', lw=0.8)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+
+    ax.plot(lags, p, c='indianred')
+    ax.set(
+        xlabel="Lag [years]", 
+        ylabel="$p$-value",
+        xticks=lags[1::2],   
+    )
+
+    ax.grid(True, which="major", axis="y", color="0.85", linewidth=1)
+    ax.tick_params(axis='y', length=0)  # Remove tick marks but keep labels
+    ax.set(
+        yscale="log",
+    )
+
+
+
+    # Put y-axis ticks/labels on the right (matches your figure)
+    ax.yaxis.tick_right()
+    ax.yaxis.set_label_position("right")
+
+    ax.text(-lags[0]/2 / (lags[-1]-lags[0]), 0.2, "acausal", ha='center', va='top', fontsize=8, transform=ax.transAxes)
+    ax.axvspan(lags[0], 0, color="k", alpha=0.02, zorder=0)
+
+
+    plt.savefig(save_path + "lag_vs_p" + figure_suffix + ".pdf", dpi=300, bbox_inches="tight")
+    
+    
+    
+#%% 
 
 if __name__ == "__main__":
 
@@ -581,9 +736,6 @@ if __name__ == "__main__":
             },
             "buffer_km": 100,
         },
-        "gCMT": {
-            "filename": data_dir + "gcmt.csv",
-        },
         "mag_completeness":4.0, # change this to avoid re-downloading the catalog
     }
 
@@ -598,8 +750,8 @@ if __name__ == "__main__":
         "filename": data_dir + AVAILABLE_STRAIN_RATE_FILES["july25_thick"],
         "data_key": "strain_out", # unfortunately this is not consistent accross datasets.
         "data_config":{
-            "starttime": 1993,
-            "endtime": 2020,
+            "starttime": 1992,
+            "endtime": 2019,
             "number_of_times": 27,
             "latitude_range": [-90, 90],
             "number_of_latitudes": 510,
@@ -628,7 +780,7 @@ if __name__ == "__main__":
         crs=crs,
     )
     
-    # change mc to 5
+    # change mc to 4.5
     earthquake_catalog_metadata["mag_completeness"] = 4.5
     reproduce_figures(
         figure_suffix="_mc4.5",
@@ -638,4 +790,6 @@ if __name__ == "__main__":
         region_metadata=region_metadata,
         crs=crs,
     )
+
+
 # %%

@@ -1,4 +1,4 @@
-# %%
+#%%
 from __future__ import annotations
 import pandas as pd
 from sklearn.neighbors import BallTree
@@ -989,3 +989,7 @@ class GCMTcatalog(EarthquakeCatalog):
         
         return df
     
+if __name__ == "__main__": 
+    catalog = GCMTcatalog("data/gcmt.csv")
+    
+# %%
